@@ -3,28 +3,42 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import shutil
 import subprocess
 import sys
+import uuid
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2
 import numpy as np
 import yaml
 
-# Thêm thư mục gốc dự án vào sys.path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 from src.data.synthetic import SYNTHETIC_VERSION, inspection_region, synthesize_defect  # noqa: E402
+from src.data.validate import FIELDS, code_fingerprint, validate_dataset  # noqa: E402
 
-FIELDS = ["split", "category", "image_path", "mask_path", "label", "defect_type"]
+log = logging.getLogger("prepare_data")
 
 
-def get_git_commit() -> str:
+def setup_logging(log_file: Path) -> None:
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%H:%M:%S")
+    log.setLevel(logging.INFO)
+    log.handlers.clear()
+    for h in (logging.StreamHandler(sys.stdout), logging.FileHandler(log_file, mode="w", encoding="utf-8")):
+        h.setFormatter(fmt)
+        log.addHandler(h)
+
+
+def git_commit() -> str:
     try:
-        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
-    except Exception:
-        return "unknown"
+        run = lambda *a: subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()  # noqa: E731
+        return run("rev-parse", "--short", "HEAD") + ("-dirty" if run("status", "--porcelain") else "")
+    except (OSError, subprocess.CalledProcessError):
+        return "no-git"
 
 
 def resize_write(src: Path, dst: Path, size: int, is_mask: bool = False) -> np.ndarray:
@@ -38,6 +52,7 @@ def resize_write(src: Path, dst: Path, size: int, is_mask: bool = False) -> np.n
 
 
 def find_category_root(src: Path, cat: str) -> Path:
+    # Kaggle mirrors sometimes nest folders (e.g. mvtec-ad/metal_nut/metal_nut/...).
     for p in [src / cat, *src.glob(f"*/{cat}"), *src.glob(f"{cat}/{cat}")]:
         if (p / "train" / "good").is_dir():
             return p
@@ -45,43 +60,37 @@ def find_category_root(src: Path, cat: str) -> Path:
 
 
 def process_category(src: Path, dst: Path, cat: str, cfg: dict, rng: np.random.Generator) -> list[dict]:
-    size, rows = cfg["image_size"], []
+    size, ccfg, rows = cfg["image_size"], cfg["categories"][cat], []
     root = find_category_root(src, cat)
     rel = lambda p: p.relative_to(dst).as_posix()  # noqa: E731
+    row = lambda split, img, mask="", label=0, dtype="good", source="": dict(  # noqa: E731
+        split=split, category=cat, image_path=rel(img), mask_path=mask, label=label,
+        defect_type=dtype, source_path=source)
 
     # train / val (normal only)
     goods = sorted((root / "train" / "good").glob("*.png"))
-    idx = rng.permutation(len(goods))
     n_val = max(1, int(len(goods) * cfg["val_ratio"]))
-    val_goods = []
-    for rank, i in enumerate(idx):
+    val_goods: list[tuple[Path, np.ndarray]] = []
+    for rank, i in enumerate(rng.permutation(len(goods))):
         split = "val" if rank < n_val else "train"
         out = dst / cat / split / "good" / goods[i].name
         img = resize_write(goods[i], out, size)
-        rows.append(dict(split=split, category=cat, image_path=rel(out), mask_path="", label=0, defect_type="good"))
+        rows.append(row(split, out))
         if split == "val":
-            val_goods.append(img)
+            val_goods.append((out, img))
 
-    # Foreground & ROI config
-    cat_cfg = cfg.get("categories", {}).get(cat, {})
-    fg_cfg = cat_cfg.get("foreground", False)
-    fg_mode = "color" if (isinstance(fg_cfg, bool) and fg_cfg) else (fg_cfg if isinstance(fg_cfg, str) else "none")
-    roi_cfg = cat_cfg.get("roi", None)
-
-    # val synthetic defects
+    # val synthetic defects, generated from held-out normals only
     for k in range(cfg["synthetic_per_category"]):
-        base = val_goods[k % len(val_goods)]
-        region = inspection_region(base, foreground=fg_mode, roi=roi_cfg)
-        bad, mask, kind = synthesize_defect(base, rng, region=region)
-        
+        base_path, base = val_goods[k % len(val_goods)]
+        region = inspection_region(base, ccfg.get("foreground", "none"), ccfg.get("roi"))
+        bad, mask, kind = synthesize_defect(base, rng, region=region,
+                                            min_contrast=cfg.get("min_contrast", 20.0))
         img_out = dst / cat / "val" / "synthetic" / f"{k:03d}_{kind}.png"
         mask_out = dst / cat / "val" / "synthetic_mask" / f"{k:03d}_{kind}.png"
-        img_out.parent.mkdir(parents=True, exist_ok=True)
-        mask_out.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(img_out), bad)
-        cv2.imwrite(str(mask_out), mask * 255)
-        rows.append(dict(split="val", category=cat, image_path=rel(img_out), mask_path=rel(mask_out),
-                         label=1, defect_type=f"synthetic_{kind}"))
+        for p, a in ((img_out, bad), (mask_out, mask * 255)):
+            p.parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(p), a)
+        rows.append(row("val", img_out, rel(mask_out), 1, f"synthetic_{kind}", rel(base_path)))
 
     # official test set
     for dtype_dir in sorted(p for p in (root / "test").iterdir() if p.is_dir()):
@@ -91,12 +100,10 @@ def process_category(src: Path, dst: Path, cat: str, cfg: dict, rng: np.random.G
             resize_write(f, out, size)
             mask_rel = ""
             if dtype != "good":
-                m_src = root / "ground_truth" / dtype / f"{f.stem}_mask.png"
                 m_out = dst / cat / "test" / f"{dtype}_mask" / f.name
-                resize_write(m_src, m_out, size, is_mask=True)
+                resize_write(root / "ground_truth" / dtype / f"{f.stem}_mask.png", m_out, size, is_mask=True)
                 mask_rel = rel(m_out)
-            rows.append(dict(split="test", category=cat, image_path=rel(out), mask_path=mask_rel,
-                             label=int(dtype != "good"), defect_type=dtype))
+            rows.append(row("test", out, mask_rel, int(dtype != "good"), dtype))
     return rows
 
 
@@ -104,44 +111,63 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", required=True, type=Path)
     ap.add_argument("--dst", default=Path("data/processed"), type=Path)
-    ap.add_argument("--config", default=Path("configs/data.yaml"), type=Path)
-    ap.add_argument("--categories", nargs="*", help="subset; default = all in config")
-    ap.add_argument("--overwrite", action="store_true", help="Overwrite existing output directory")
+    ap.add_argument("--config", default=ROOT / "configs/data.yaml", type=Path)
+    ap.add_argument("--overwrite", action="store_true", help="delete an existing --dst first")
     args = ap.parse_args()
 
-    if args.overwrite and args.dst.exists():
+    # Stale files from an older run silently mixing into a new dataset is a classic bug.
+    if args.dst.exists() and any(args.dst.iterdir()):
+        if not args.overwrite:
+            sys.exit(f"{args.dst} is not empty. Re-run with --overwrite to rebuild it.")
         shutil.rmtree(args.dst)
-        print(f"Cleared existing output directory: {args.dst}")
+    args.dst.mkdir(parents=True, exist_ok=True)
+    setup_logging(args.dst / "prepare_data.log")
 
     cfg = yaml.safe_load(args.config.read_text())
+    run_id, commit = uuid.uuid4().hex[:8], git_commit()
+    log.info("run=%s code=%s synthetic_v%d val_ratio=%s seed=%s", run_id, commit, SYNTHETIC_VERSION,
+             cfg["val_ratio"], cfg["seed"])
+    if commit.endswith("-dirty") or commit == "no-git":
+        log.warning("code is not a clean git commit -> results are harder to reproduce")
+
     rng = np.random.default_rng(cfg["seed"])
     rows = []
-    for cat in args.categories or list(cfg["categories"]):
+    for cat in cfg["categories"]:
         cat_rows = process_category(args.src, args.dst, cat, cfg, rng)
         rows += cat_rows
-        stats = Counter((r["split"], r["label"]) for r in cat_rows)
-        print(f"[{cat}] " + "  ".join(f"{s}/{'bad' if l else 'good'}={n}" for (s, l), n in sorted(stats.items())))
+        c = Counter((r["split"], r["label"]) for r in cat_rows)
+        log.info("[%s] %s", cat, "  ".join(f"{s}/{'bad' if l else 'good'}={n}" for (s, l), n in sorted(c.items())))
 
-    args.dst.mkdir(parents=True, exist_ok=True)
-    
-    # Ghi manifest.csv
     with open(args.dst / "manifest.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=FIELDS)
         w.writeheader()
         w.writerows(rows)
-    print(f"Wrote {len(rows)} rows -> {args.dst / 'manifest.csv'}")
 
-    # Ghi dataset_meta.json
-    counts = Counter(f"{r['category']}/{r['split']}/{'bad' if r['label'] else 'good'}" for r in rows)
     meta = {
-        "git_commit": get_git_commit(),
+        "run_id": run_id,
+        "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "git_commit": commit,
+        "code_fingerprint": code_fingerprint(),
         "synthetic_version": SYNTHETIC_VERSION,
+        "source": str(args.src),
         "config": cfg,
-        "counts": dict(counts),
+        "n_rows": len(rows),
     }
-    with open(args.dst / "dataset_meta.json", "w") as f:
-        json.dump(meta, f, indent=2)
-    print(f"Wrote metadata -> {args.dst / 'dataset_meta.json'}")
+    meta_path = args.dst / "dataset_meta.json"
+    meta_path.write_text(json.dumps(meta, indent=2))
+
+    errors, stats = validate_dataset(args.dst, cfg)
+    meta["stats"] = stats
+    meta["validation"] = {"passed": not errors, "errors": errors}
+    meta_path.write_text(json.dumps(meta, indent=2))
+    for cat, s in stats.items():
+        log.info("[%s] contrast min/median=%s/%s kinds=%s", cat, s["contrast_min"], s["contrast_median"], s["kinds"])
+    for e in errors:
+        log.error(e)
+    if errors:
+        log.error("VALIDATION FAILED (%d errors) run=%s -> do NOT train on this dataset", len(errors), run_id)
+        sys.exit(1)
+    log.info("VALIDATION PASSED run=%s rows=%d -> %s", run_id, len(rows), args.dst)
 
 
 if __name__ == "__main__":
