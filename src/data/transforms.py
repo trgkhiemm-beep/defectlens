@@ -4,7 +4,11 @@ Requires albumentations>=2.0 (parameter names changed from 1.x).
 """
 from __future__ import annotations
 
-import albumentations as A
+import os
+
+os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")  # skip network version check (slow/offline)
+
+import albumentations as A  # noqa: E402
 import cv2
 from albumentations.pytorch import ToTensorV2
 
