@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import shutil
 import sys
 from collections import Counter
 from pathlib import Path
@@ -10,8 +11,9 @@ import cv2
 import numpy as np
 import yaml
 
+# Thêm thư mục gốc dự án vào sys.path trước khi import từ src
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.data.synthetic import synthesize_defect  # noqa: E402
+from src.data.synthetic import inspection_region, synthesize_defect  # noqa: E402
 
 FIELDS = ["split", "category", "image_path", "mask_path", "label", "defect_type"]
 
@@ -27,7 +29,7 @@ def resize_write(src: Path, dst: Path, size: int, is_mask: bool = False) -> np.n
 
 
 def find_category_root(src: Path, cat: str) -> Path:
-    # Kaggle mirrors sometimes nest folders (e.g. mvtec-ad/metal_nut/metal_nut/...).
+    # Kaggle mirrors sometimes nest folders (e.g. ipythonx/metal_nut/metal_nut/...).
     for p in [src / cat, *src.glob(f"*/{cat}"), *src.glob(f"{cat}/{cat}")]:
         if (p / "train" / "good").is_dir():
             return p
@@ -52,11 +54,22 @@ def process_category(src: Path, dst: Path, cat: str, cfg: dict, rng: np.random.G
         if split == "val":
             val_goods.append(img)
 
+    # Đọc cấu hình foreground & roi của category
+    cat_cfg = cfg.get("categories", {}).get(cat, {})
+    fg_cfg = cat_cfg.get("foreground", False)
+    fg_mode = "color" if (isinstance(fg_cfg, bool) and fg_cfg) else (fg_cfg if isinstance(fg_cfg, str) else "none")
+    roi_cfg = cat_cfg.get("roi", None)
+
     # val synthetic defects, generated from held-out normals (never from train split)
-    use_fg = cfg["categories"][cat].get("foreground", False)
     for k in range(cfg["synthetic_per_category"]):
         base = val_goods[k % len(val_goods)]
-        bad, mask, kind = synthesize_defect(base, rng, use_foreground=use_fg)
+        
+        # 1. Tính vùng kiểm tra (region) tương thích synthetic_v2
+        region = inspection_region(base, foreground=fg_mode, roi=roi_cfg)
+        
+        # 2. Sinh vết lỗi dựa trên region
+        bad, mask, kind = synthesize_defect(base, rng, region=region)
+        
         img_out = dst / cat / "val" / "synthetic" / f"{k:03d}_{kind}.png"
         mask_out = dst / cat / "val" / "synthetic_mask" / f"{k:03d}_{kind}.png"
         img_out.parent.mkdir(parents=True, exist_ok=True)
@@ -89,7 +102,12 @@ def main() -> None:
     ap.add_argument("--dst", default=Path("data/processed"), type=Path)
     ap.add_argument("--config", default=Path("configs/data.yaml"), type=Path)
     ap.add_argument("--categories", nargs="*", help="subset; default = all in config")
+    ap.add_argument("--overwrite", action="store_true", help="Overwrite existing output directory")
     args = ap.parse_args()
+
+    if args.overwrite and args.dst.exists():
+        shutil.rmtree(args.dst)
+        print(f"Cleared existing output directory: {args.dst}")
 
     cfg = yaml.safe_load(args.config.read_text())
     rng = np.random.default_rng(cfg["seed"])
