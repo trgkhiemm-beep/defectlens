@@ -3,25 +3,32 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-# Bump whenever generation logic changes; recorded in dataset_meta.json.
-SYNTHETIC_VERSION = 2
+SYNTHETIC_VERSION = "2"
+
+
+def mask_contrast(img: np.ndarray, mask: np.ndarray) -> float:
+    """Tính độ tương phản độ sáng trung bình giữa vùng mask lỗi và nền xung quanh."""
+    m = mask.astype(bool)
+    if not np.any(m) or np.all(m):
+        return 0.0
+    fg = img[m].astype(np.float32).mean()
+    bg = img[~m].astype(np.float32).mean()
+    return float(abs(fg - bg))
 
 
 def foreground_mask(img: np.ndarray) -> np.ndarray:
     """Object mask for parts on a UNIFORM background (capsule, metal_nut):
-    pixels far from the median border colour. Returns uint8 {0,1}.
-    Not suitable for cluttered backgrounds (e.g. transistor on a PCB) -> use ROI."""
+    pixels far from the median border colour. Returns uint8 {0,1}."""
     border = np.concatenate([img[0], img[-1], img[:, 0], img[:, -1]]).astype(np.float32)
     dist = np.linalg.norm(img.astype(np.float32) - np.median(border, axis=0), axis=2)
     dist = cv2.normalize(dist, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     _, fg = cv2.threshold(dist, 0, 1, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     fg = cv2.morphologyEx(fg, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
-    return cv2.erode(fg, np.ones((9, 9), np.uint8))  # keep defects inside the object
+    return cv2.erode(fg, np.ones((9, 9), np.uint8))
 
 
 def roi_mask(h: int, w: int, roi: list[float] | None) -> np.ndarray:
-    """Inspection ROI in normalised [x0, y0, x1, y1]; None = whole image.
-    Aligned fixtures + fixed ROI is exactly how production AOI stations work."""
+    """Inspection ROI in normalised [x0, y0, x1, y1]; None = whole image."""
     m = np.zeros((h, w), np.uint8)
     if roi is None:
         m[:] = 1
@@ -35,7 +42,7 @@ def inspection_region(img: np.ndarray, foreground: str = "none", roi: list[float
     region = roi_mask(*img.shape[:2], roi)
     if foreground == "color":
         fg = foreground_mask(img) & region
-        if fg.sum() > 0.02 * region.sum():  # guard against a failed Otsu split
+        if fg.sum() > 0.02 * region.sum():
             region = fg
     return region
 
@@ -74,8 +81,7 @@ def scratch_mask(region: np.ndarray, rng: np.random.Generator) -> np.ndarray:
 
 
 def _texture_from(img: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-    """Foreign texture: a shifted, rotated, colour-shifted copy of the image
-    itself (no external texture dataset needed)."""
+    """Foreign texture generated from image itself."""
     h, w = img.shape[:2]
     tex = np.roll(img, (int(rng.integers(h)), int(rng.integers(w))), axis=(0, 1))
     tex = cv2.rotate(tex, int(rng.choice([cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180])))
@@ -95,7 +101,7 @@ def synthesize_defect(img: np.ndarray, rng: np.random.Generator, region: np.ndar
         mask = scratch_mask(region, rng) if kind == "scratch" else blob_mask(region, rng)
         if mask.sum() >= min_pixels:
             break
-    else:  # tiny region: fall back to a guaranteed-visible blob
+    else:
         kind, mask = "texture_blend", blob_mask(region, rng, area=(0.08, 0.12))
 
     if kind == "cutpaste":
@@ -104,12 +110,12 @@ def synthesize_defect(img: np.ndarray, rng: np.random.Generator, region: np.ndar
         beta = 1.0
     elif kind == "scratch":
         local = img[mask.astype(bool)].mean()
-        source = np.full_like(img, 230 if local < 110 else 25)  # contrast with the surface
+        source = np.full_like(img, 230 if local < 110 else 25)
         beta = rng.uniform(0.6, 0.9)
     else:
         source = _texture_from(img, rng)
         beta = rng.uniform(0.5, 1.0)
 
-    m = cv2.GaussianBlur(mask.astype(np.float32), (3, 3), 0)[..., None] * beta  # soft edges
+    m = cv2.GaussianBlur(mask.astype(np.float32), (3, 3), 0)[..., None] * beta
     out = img.astype(np.float32) * (1 - m) + source.astype(np.float32) * m
     return out.astype(np.uint8), mask, kind
