@@ -1,13 +1,5 @@
-# DefectLens data config.
-# Augmentation is CATEGORY-AWARE on purpose: in anomaly detection, an augmentation
-# that is harmless for classification can turn a normal sample into a "defect".
-#   - metal_nut: the "flip" defect IS a mirrored nut -> horizontal flip forbidden.
-#   - capsule:   printed "500" text -> any flip creates mirrored text (abnormal).
-#   - transistor:"misplaced" defect = rotated/shifted part -> no rotation.
-#   - carpet:    stationary texture -> flips/rot90 are safe.
-
 image_size: 256
-val_ratio: 0.1          # fraction of train/good held out for threshold selection
+val_ratio: 0.2
 synthetic_per_category: 60
 seed: 42
 
