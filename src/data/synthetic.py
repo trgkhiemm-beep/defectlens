@@ -3,7 +3,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-SYNTHETIC_VERSION = "2"
+# Sửa thành số nguyên để khớp với %d trong prepare_data.py
+SYNTHETIC_VERSION = 2  
 
 
 def mask_contrast(img: np.ndarray, mask: np.ndarray) -> float:
@@ -17,8 +18,6 @@ def mask_contrast(img: np.ndarray, mask: np.ndarray) -> float:
 
 
 def foreground_mask(img: np.ndarray) -> np.ndarray:
-    """Object mask for parts on a UNIFORM background (capsule, metal_nut):
-    pixels far from the median border colour. Returns uint8 {0,1}."""
     border = np.concatenate([img[0], img[-1], img[:, 0], img[:, -1]]).astype(np.float32)
     dist = np.linalg.norm(img.astype(np.float32) - np.median(border, axis=0), axis=2)
     dist = cv2.normalize(dist, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
@@ -28,7 +27,6 @@ def foreground_mask(img: np.ndarray) -> np.ndarray:
 
 
 def roi_mask(h: int, w: int, roi: list[float] | None) -> np.ndarray:
-    """Inspection ROI in normalised [x0, y0, x1, y1]; None = whole image."""
     m = np.zeros((h, w), np.uint8)
     if roi is None:
         m[:] = 1
@@ -56,7 +54,6 @@ def _largest_component(mask: np.ndarray) -> np.ndarray:
 
 def blob_mask(region: np.ndarray, rng: np.random.Generator,
               area: tuple[float, float] = (0.01, 0.06)) -> np.ndarray:
-    """One Perlin-like blob inside `region`; area is a fraction of the region."""
     h, w = region.shape
     scale = int(rng.choice([16, 32]))
     noise = rng.random((max(h // scale, 2), max(w // scale, 2))).astype(np.float32)
@@ -67,7 +64,6 @@ def blob_mask(region: np.ndarray, rng: np.random.Generator,
 
 
 def scratch_mask(region: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-    """A short polyline starting inside the region, clipped to it."""
     h, w = region.shape
     ys, xs = np.nonzero(region)
     k = int(rng.integers(len(ys)))
@@ -81,7 +77,6 @@ def scratch_mask(region: np.ndarray, rng: np.random.Generator) -> np.ndarray:
 
 
 def _texture_from(img: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-    """Foreign texture generated from image itself."""
     h, w = img.shape[:2]
     tex = np.roll(img, (int(rng.integers(h)), int(rng.integers(w))), axis=(0, 1))
     tex = cv2.rotate(tex, int(rng.choice([cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180])))
@@ -90,8 +85,9 @@ def _texture_from(img: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     return np.clip(tex.astype(np.int16) + shift, 0, 255).astype(np.uint8)
 
 
+# Thêm tham số min_contrast vào chữ ký hàm
 def synthesize_defect(img: np.ndarray, rng: np.random.Generator, region: np.ndarray | None = None,
-                      min_pixels: int = 30, max_tries: int = 10) -> tuple[np.ndarray, np.ndarray, str]:
+                      min_pixels: int = 30, min_contrast: float = 0.0, max_tries: int = 10) -> tuple[np.ndarray, np.ndarray, str]:
     """Return (defective_image uint8 HxWx3, mask uint8 {0,1}, defect_kind)."""
     h, w = img.shape[:2]
     region = np.ones((h, w), np.uint8) if region is None else region
@@ -99,23 +95,36 @@ def synthesize_defect(img: np.ndarray, rng: np.random.Generator, region: np.ndar
 
     for _ in range(max_tries):
         mask = scratch_mask(region, rng) if kind == "scratch" else blob_mask(region, rng)
-        if mask.sum() >= min_pixels:
-            break
-    else:
-        kind, mask = "texture_blend", blob_mask(region, rng, area=(0.08, 0.12))
+        if mask.sum() < min_pixels:
+            continue
+            
+        if kind == "cutpaste":
+            dy, dx = rng.integers(-h // 4, h // 4), rng.integers(-w // 4, w // 4)
+            source = np.roll(img, (int(dy), int(dx)), axis=(0, 1))
+            beta = 1.0
+        elif kind == "scratch":
+            local = img[mask.astype(bool)].mean()
+            source = np.full_like(img, 230 if local < 110 else 25)
+            beta = rng.uniform(0.6, 0.9)
+        else:
+            source = _texture_from(img, rng)
+            beta = rng.uniform(0.5, 1.0)
 
-    if kind == "cutpaste":
-        dy, dx = rng.integers(-h // 4, h // 4), rng.integers(-w // 4, w // 4)
-        source = np.roll(img, (int(dy), int(dx)), axis=(0, 1))
-        beta = 1.0
-    elif kind == "scratch":
-        local = img[mask.astype(bool)].mean()
-        source = np.full_like(img, 230 if local < 110 else 25)
-        beta = rng.uniform(0.6, 0.9)
-    else:
-        source = _texture_from(img, rng)
-        beta = rng.uniform(0.5, 1.0)
+        m = cv2.GaussianBlur(mask.astype(np.float32), (3, 3), 0)[..., None] * beta
+        out = img.astype(np.float32) * (1 - m) + source.astype(np.float32) * m
+        out_uint8 = out.astype(np.uint8)
 
+        # Kiểm tra điều kiện min_contrast nếu được yêu cầu
+        if min_contrast > 0.0:
+            if mask_contrast(out_uint8, mask) < min_contrast:
+                continue  # Bỏ qua và thử tạo lại vết lỗi mới nếu độ tương phản quá thấp
+                
+        return out_uint8, mask, kind
+
+    # Fallback (nếu vượt quá max_tries)
+    kind, mask = "texture_blend", blob_mask(region, rng, area=(0.08, 0.12))
+    source = _texture_from(img, rng)
+    beta = rng.uniform(0.5, 1.0)
     m = cv2.GaussianBlur(mask.astype(np.float32), (3, 3), 0)[..., None] * beta
     out = img.astype(np.float32) * (1 - m) + source.astype(np.float32) * m
     return out.astype(np.uint8), mask, kind
