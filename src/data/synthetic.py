@@ -3,6 +3,9 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+# Bump whenever generation logic changes; recorded in dataset_meta.json.
+SYNTHETIC_VERSION = 2
+
 
 def foreground_mask(img: np.ndarray) -> np.ndarray:
     """Object mask for parts on a UNIFORM background (capsule, metal_nut):
