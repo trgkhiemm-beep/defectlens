@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import shutil
+import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
@@ -11,11 +13,18 @@ import cv2
 import numpy as np
 import yaml
 
-# Thêm thư mục gốc dự án vào sys.path trước khi import từ src
+# Thêm thư mục gốc dự án vào sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.data.synthetic import inspection_region, synthesize_defect  # noqa: E402
+from src.data.synthetic import SYNTHETIC_VERSION, inspection_region, synthesize_defect  # noqa: E402
 
 FIELDS = ["split", "category", "image_path", "mask_path", "label", "defect_type"]
+
+
+def get_git_commit() -> str:
+    try:
+        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+    except Exception:
+        return "unknown"
 
 
 def resize_write(src: Path, dst: Path, size: int, is_mask: bool = False) -> np.ndarray:
@@ -29,7 +38,6 @@ def resize_write(src: Path, dst: Path, size: int, is_mask: bool = False) -> np.n
 
 
 def find_category_root(src: Path, cat: str) -> Path:
-    # Kaggle mirrors sometimes nest folders (e.g. ipythonx/metal_nut/metal_nut/...).
     for p in [src / cat, *src.glob(f"*/{cat}"), *src.glob(f"{cat}/{cat}")]:
         if (p / "train" / "good").is_dir():
             return p
@@ -54,20 +62,16 @@ def process_category(src: Path, dst: Path, cat: str, cfg: dict, rng: np.random.G
         if split == "val":
             val_goods.append(img)
 
-    # Đọc cấu hình foreground & roi của category
+    # Foreground & ROI config
     cat_cfg = cfg.get("categories", {}).get(cat, {})
     fg_cfg = cat_cfg.get("foreground", False)
     fg_mode = "color" if (isinstance(fg_cfg, bool) and fg_cfg) else (fg_cfg if isinstance(fg_cfg, str) else "none")
     roi_cfg = cat_cfg.get("roi", None)
 
-    # val synthetic defects, generated from held-out normals (never from train split)
+    # val synthetic defects
     for k in range(cfg["synthetic_per_category"]):
         base = val_goods[k % len(val_goods)]
-        
-        # 1. Tính vùng kiểm tra (region) tương thích synthetic_v2
         region = inspection_region(base, foreground=fg_mode, roi=roi_cfg)
-        
-        # 2. Sinh vết lỗi dựa trên region
         bad, mask, kind = synthesize_defect(base, rng, region=region)
         
         img_out = dst / cat / "val" / "synthetic" / f"{k:03d}_{kind}.png"
@@ -119,11 +123,25 @@ def main() -> None:
         print(f"[{cat}] " + "  ".join(f"{s}/{'bad' if l else 'good'}={n}" for (s, l), n in sorted(stats.items())))
 
     args.dst.mkdir(parents=True, exist_ok=True)
+    
+    # Ghi manifest.csv
     with open(args.dst / "manifest.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=FIELDS)
         w.writeheader()
         w.writerows(rows)
     print(f"Wrote {len(rows)} rows -> {args.dst / 'manifest.csv'}")
+
+    # Ghi dataset_meta.json
+    counts = Counter(f"{r['category']}/{r['split']}/{'bad' if r['label'] else 'good'}" for r in rows)
+    meta = {
+        "git_commit": get_git_commit(),
+        "synthetic_version": SYNTHETIC_VERSION,
+        "config": cfg,
+        "counts": dict(counts),
+    }
+    with open(args.dst / "dataset_meta.json", "w") as f:
+        json.dump(meta, f, indent=2)
+    print(f"Wrote metadata -> {args.dst / 'dataset_meta.json'}")
 
 
 if __name__ == "__main__":
