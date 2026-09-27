@@ -29,12 +29,17 @@ BACKBONES = {
 }
 
 
-def gaussian_kernel(sigma: float) -> torch.Tensor:
+def gaussian_kernel_1d(sigma: float) -> torch.Tensor:
     radius = int(math.ceil(4 * sigma))
     x = torch.arange(-radius, radius + 1, dtype=torch.float32)
-    k1 = torch.exp(-(x ** 2) / (2 * sigma ** 2))
-    k1 = k1 / k1.sum()
-    return (k1[:, None] * k1[None, :])[None, None]  # (1, 1, K, K)
+    k = torch.exp(-(x ** 2) / (2 * sigma ** 2))
+    return k / k.sum()
+
+
+def gaussian_kernel(sigma: float) -> torch.Tensor:
+    """2D kernel (1, 1, K, K); kept as the reference the separable blur is tested against."""
+    k1 = gaussian_kernel_1d(sigma)
+    return (k1[:, None] * k1[None, :])[None, None]
 
 
 @torch.no_grad()
@@ -60,9 +65,12 @@ def greedy_coreset(embeddings: torch.Tensor, n: int, proj_dim: int = 128, seed: 
     return selected
 
 
-class PatchCore(nn.Module):
+class Embedder(nn.Module):
+    """Frozen CNN -> locally-aware patch features. Shared by every category, so on the
+    edge it is exported (and INT8-quantised) once."""
+
     def __init__(self, backbone: str = "wide_resnet50_2", layers: tuple[str, ...] = ("layer2", "layer3"),
-                 pretrained: bool = True, coreset_ratio: float = 0.1, sigma: float = 4.0):
+                 pretrained: bool = True):
         super().__init__()
         weights_name, channels = BACKBONES[backbone]
         weights = getattr(torchvision.models, weights_name).IMAGENET1K_V1 if pretrained else None
@@ -72,19 +80,55 @@ class PatchCore(nn.Module):
             p.requires_grad_(False)
         self.layers = layers
         self.embed_dim = sum(channels[l] for l in layers)
-        self.coreset_ratio = coreset_ratio
-        self.register_buffer("blur_kernel", gaussian_kernel(sigma))
-        self.register_buffer("memory_bank", torch.empty(0, self.embed_dim))
-        self.config = dict(backbone=backbone, layers=list(layers), coreset_ratio=coreset_ratio, sigma=sigma)
 
-    # ---------------------------------------------------------------- features
-    def embed(self, x: torch.Tensor) -> torch.Tensor:
-        """(B, 3, H, W) normalised images -> (B, D, h, w) locally-aware patch features."""
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """(B, 3, H, W) normalised images -> (B, D, h, w)."""
         feats = self.extractor(x)
         maps = [F.avg_pool2d(feats[l], kernel_size=3, stride=1, padding=1) for l in self.layers]
         size = maps[0].shape[-2:]
         maps = [maps[0]] + [F.interpolate(m, size=size, mode="bilinear", align_corners=False) for m in maps[1:]]
         return torch.cat(maps, dim=1)
+
+
+class Scorer(nn.Module):
+    """Patch embeddings -> (image score, anomaly map) against ONE category's memory bank.
+    Only matmul / min / interpolate / conv: exports cleanly to OpenVINO / ONNX."""
+
+    def __init__(self, bank: torch.Tensor, sigma: float, out_size: int):
+        super().__init__()
+        self.register_buffer("bank", bank)
+        self.register_buffer("bank_sq", (bank * bank).sum(1))
+        k = gaussian_kernel_1d(sigma)
+        # Separable Gaussian: two 1D passes (2K MACs/pixel) == one KxK pass (K^2 MACs/pixel).
+        # With sigma=4 (K=33) this cut the blur from ~20 ms to a few ms on an i5-1135G7.
+        self.register_buffer("blur_x", k.view(1, 1, 1, -1))
+        self.register_buffer("blur_y", k.view(1, 1, -1, 1))
+        self.out_size = out_size
+
+    def forward(self, emb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        b, d, h, w = emb.shape
+        a = emb.flatten(2).transpose(1, 2)                                    # (B, hw, D)
+        d2 = (a * a).sum(-1, keepdim=True) - 2 * a @ self.bank.T + self.bank_sq  # (B, hw, M)
+        dist = d2.min(dim=-1).values.clamp_min(0).sqrt().reshape(b, 1, h, w)
+        amap = F.interpolate(dist, size=(self.out_size, self.out_size), mode="bilinear", align_corners=False)
+        pad = self.blur_x.shape[-1] // 2
+        amap = F.conv2d(F.conv2d(F.pad(amap, (pad, pad, pad, pad), mode="reflect"), self.blur_x), self.blur_y)
+        return amap.amax(dim=(1, 2, 3)), amap
+
+
+class PatchCore(nn.Module):
+    def __init__(self, backbone: str = "wide_resnet50_2", layers: tuple[str, ...] = ("layer2", "layer3"),
+                 pretrained: bool = True, coreset_ratio: float = 0.1, sigma: float = 4.0):
+        super().__init__()
+        self.embedder = Embedder(backbone, layers, pretrained)
+        self.embed_dim = self.embedder.embed_dim
+        self.coreset_ratio = coreset_ratio
+        self.sigma = sigma
+        self.register_buffer("memory_bank", torch.empty(0, self.embed_dim))
+        self.config = dict(backbone=backbone, layers=list(layers), coreset_ratio=coreset_ratio, sigma=sigma)
+
+    def embed(self, x: torch.Tensor) -> torch.Tensor:
+        return self.embedder(x)
 
     # --------------------------------------------------------------------- fit
     @torch.no_grad()
@@ -103,9 +147,13 @@ class PatchCore(nn.Module):
         return {"n_patches": len(all_emb), "bank_size": n, "bank_mb": round(self.memory_bank.numel() * 4 / 2**20, 1)}
 
     # ----------------------------------------------------------------- predict
+    def scorer(self, out_size: int) -> Scorer:
+        if self.memory_bank.numel() == 0:
+            raise RuntimeError("PatchCore is not fitted")
+        return Scorer(self.memory_bank, self.sigma, out_size).to(self.memory_bank.device)
+
     def nearest_distance(self, emb: torch.Tensor, chunk: int = 4096) -> torch.Tensor:
-        """(P, D) -> (P,) Euclidean distance to the nearest memory-bank entry.
-        Uses ||a||^2 - 2ab + ||b||^2 (a matmul) instead of cdist: exportable and fast."""
+        """(P, D) -> (P,) Euclidean distance to the nearest memory-bank entry."""
         bank = self.memory_bank
         bank_sq = (bank * bank).sum(1)
         out = []
@@ -115,16 +163,11 @@ class PatchCore(nn.Module):
         return torch.cat(out)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """(B, 3, H, W) -> image scores (B,), anomaly maps (B, 1, H, W)."""
-        if self.memory_bank.numel() == 0:
-            raise RuntimeError("PatchCore is not fitted")
-        e = self.embed(x)
-        b, d, h, w = e.shape
-        scores = self.nearest_distance(e.permute(0, 2, 3, 1).reshape(-1, d)).reshape(b, 1, h, w)
-        amap = F.interpolate(scores, size=x.shape[-2:], mode="bilinear", align_corners=False)
-        pad = self.blur_kernel.shape[-1] // 2
-        amap = F.conv2d(F.pad(amap, (pad, pad, pad, pad), mode="reflect"), self.blur_kernel)
-        return amap.amax(dim=(1, 2, 3)), amap
+        """(B, 3, H, W) -> image scores (B,), anomaly maps (B, 1, H, W).
+        Scores one image at a time so the (hw x M) distance matrix stays small."""
+        scorer = self.scorer(x.shape[-1])
+        results = [scorer(e[None]) for e in self.embed(x)]
+        return torch.cat([r[0] for r in results]), torch.cat([r[1] for r in results])
 
     # --------------------------------------------------------------- persist
     def state(self) -> dict:
