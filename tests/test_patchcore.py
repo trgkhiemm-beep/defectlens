@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.data.validate import load_ready_dataset  # noqa: E402
-from src.eval.metrics import aupro, auroc, best_f1_threshold, evaluate  # noqa: E402
+from src.eval.metrics import aupro, auroc, best_f1_threshold, evaluate, score_shift, select_threshold  # noqa: E402
 from src.models.patchcore import PatchCore, greedy_coreset  # noqa: E402
 
 
@@ -44,9 +44,30 @@ def test_threshold_selection_and_oracle_gap():
             "amaps": np.zeros((4, 8, 8)), "masks": np.zeros((4, 8, 8), bool)}
     test["masks"][2:, 2:4, 2:4] = True
     test["amaps"][2:, 2:4, 2:4] = 1
-    m = evaluate({**val, "amaps": test["amaps"], "masks": test["masks"]}, test)
-    assert m["test_oracle"]["f1"] == 1.0
-    assert m["f1_gap_vs_oracle"] >= 0
+    m = evaluate({**val, "amaps": test["amaps"], "masks": test["masks"]}, test, policy="val_f1")
+    ops = m["operating_points"]
+    assert ops["oracle"]["f1"] == 1.0
+    assert set(ops["policies"]) == {"val_f1", "normal_quantile"}
+    assert all(p["f1_gap_vs_oracle"] >= 0 for p in ops["policies"].values())
+    assert m["threshold"] == ops["policies"]["val_f1"]["threshold"]
+
+
+def test_normal_quantile_ignores_synthetic_defects():
+    rng = np.random.default_rng(0)
+    normals = rng.normal(1.0, 0.1, 1000)
+    easy = {"scores": np.r_[normals, np.full(50, 9.0)], "labels": np.r_[np.zeros(1000), np.ones(50)]}
+    hard = {"scores": np.r_[normals, np.full(50, 1.1)], "labels": np.r_[np.zeros(1000), np.ones(50)]}
+    # val_f1 moves with synthetic-defect difficulty; normal_quantile does not
+    assert select_threshold(easy, "val_f1") > 2 > select_threshold(hard, "val_f1")
+    t = select_threshold(easy, "normal_quantile", 0.05)
+    assert t == select_threshold(hard, "normal_quantile", 0.05)
+    assert (normals >= t).mean() == pytest.approx(0.05, abs=0.002)
+
+
+def test_score_shift_detects_drift():
+    v = {"scores": np.r_[np.ones(10), [5.0]], "labels": np.r_[np.zeros(10), [1]]}
+    t = {"scores": np.r_[2 * np.ones(10), [5.0]], "labels": np.r_[np.zeros(10), [1]]}
+    assert score_shift(v, t)["median_ratio_test_over_val"] == pytest.approx(2.0)
 
 
 # -------------------------------------------------------------- patchcore
@@ -113,6 +134,11 @@ def test_train_script_end_to_end(built, tmp_path):
     assert rec["lineage"]["dataset_run_id"] == json.loads((data / "dataset_meta.json").read_text())["run_id"]
     assert (out / "transistor" / "model.pt").exists() and (out / "transistor" / "examples.png").exists()
     assert "| transistor |" in (out / "summary.md").read_text()
+    assert "normal_quantile" in (out / "summary.md").read_text()
+
+    subprocess.run([sys.executable, "scripts/analyze_thresholds.py", "--artifacts", str(out)], cwd=ROOT, check=True)
+    report = (out / "thresholds.md").read_text()
+    assert "## transistor" in report and "oracle" in report and "`scratch`" in report
 
 
 def test_training_refuses_unvalidated_dataset(built, tmp_path):

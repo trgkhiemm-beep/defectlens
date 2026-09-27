@@ -80,18 +80,58 @@ def best_f1_threshold(scores: np.ndarray, labels: np.ndarray) -> dict:
     return best
 
 
-def evaluate(val: dict, test: dict) -> dict:
-    """val/test: {"scores": (N,), "labels": (N,), "amaps": (N,H,W), "masks": (N,H,W)}."""
-    chosen = best_f1_threshold(val["scores"], val["labels"])
-    at_val_thr = binary_stats(test["scores"], test["labels"], chosen["threshold"])
+def select_threshold(val: dict, policy: str, target_fpr: float = 0.05) -> float:
+    """Pick the operating threshold from VALIDATION data only.
+
+    val_f1          : maximise F1 on val normals + SYNTHETIC defects. Depends on how
+                      realistic the synthetic defects are (too easy -> threshold too high).
+    normal_quantile : (1 - target_fpr) quantile of val NORMAL scores. Uses only real
+                      images and encodes the business constraint "false-reject rate
+                      <= target_fpr"; standard practice on inspection lines.
+    """
+    scores, labels = np.asarray(val["scores"]), np.asarray(val["labels"])
+    if policy == "val_f1":
+        return best_f1_threshold(scores, labels)["threshold"]
+    if policy == "normal_quantile":
+        return float(np.quantile(scores[labels == 0], 1.0 - target_fpr))
+    raise ValueError(f"unknown threshold policy {policy!r}")
+
+
+POLICIES = ("val_f1", "normal_quantile")
+
+
+def score_shift(val: dict, test: dict) -> dict:
+    """Do normal images score the same on val and test? A large shift means the
+    threshold cannot transfer, whatever the policy (diagnostic only, never used to select)."""
+    v = np.asarray(val["scores"])[np.asarray(val["labels"]) == 0]
+    t = np.asarray(test["scores"])[np.asarray(test["labels"]) == 0]
+    return {"val_normal_median": float(np.median(v)), "test_normal_median": float(np.median(t)),
+            "val_normal_p95": float(np.quantile(v, 0.95)), "test_normal_p95": float(np.quantile(t, 0.95)),
+            "median_ratio_test_over_val": float(np.median(t) / np.median(v))}
+
+
+def evaluate_thresholds(val: dict, test: dict, target_fpr: float = 0.05) -> dict:
+    """Image-level operating-point report for every policy (needs only image scores)."""
     oracle = best_f1_threshold(test["scores"], test["labels"])
+    out = {"oracle": oracle, "score_shift": score_shift(val, test), "policies": {}}
+    for policy in POLICIES:
+        thr = select_threshold(val, policy, target_fpr)
+        stats = binary_stats(test["scores"], test["labels"], thr)
+        out["policies"][policy] = {**stats, "f1_gap_vs_oracle": oracle["f1"] - stats["f1"]}
+    return out
+
+
+def evaluate(val: dict, test: dict, policy: str = "normal_quantile", target_fpr: float = 0.05) -> dict:
+    """val/test: {"scores": (N,), "labels": (N,), "amaps": (N,H,W), "masks": (N,H,W)}."""
+    ops = evaluate_thresholds(val, test, target_fpr)
     return {
         "image_auroc": auroc(test["scores"], test["labels"]),
         "pixel_auroc": auroc(test["amaps"], test["masks"]),
         "aupro_30": aupro(test["amaps"], test["masks"]),
         "val_image_auroc": auroc(val["scores"], val["labels"]),
-        "threshold": chosen["threshold"],
-        "test_at_val_threshold": at_val_thr,
-        "test_oracle": oracle,
-        "f1_gap_vs_oracle": oracle["f1"] - at_val_thr["f1"],
+        "policy": policy,
+        "target_fpr": target_fpr,
+        "threshold": ops["policies"][policy]["threshold"],
+        "test_at_threshold": ops["policies"][policy],
+        "operating_points": ops,
     }

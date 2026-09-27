@@ -4,8 +4,11 @@
 
 Per category -> <out>/<category>/
   model.pt       memory bank + model config (backbone weights are re-downloaded, frozen)
-  metrics.json   AUROC / AUPRO / F1 at the VAL-selected threshold, oracle gap,
+  metrics.json   AUROC / AUPRO, operating points of every threshold policy (chosen on
+                 VAL only) vs the test oracle, val/test normal-score shift,
                  per-defect-type AUROC, latency, full lineage (dataset run, git commit)
+  scores.json    image-level val/test scores -> re-analyse thresholds on CPU without
+                 re-training (scripts/analyze_thresholds.py)
   examples.png   heatmaps of test defects, coloured relative to the chosen threshold
 Across categories -> <out>/summary.json, <out>/summary.md (README-ready table)
 """
@@ -109,37 +112,55 @@ def run_category(cat: str, args, cfg: dict, meta: dict, device) -> dict:
     fit_stats["fit_seconds"] = round(time.perf_counter() - t0, 1)
 
     val, test = predict(model, loader("val"), device), predict(model, loader("test"), device)
-    metrics = evaluate(val, test)
+    metrics = evaluate(val, test, cfg["threshold_policy"], cfg["target_fpr"])
     metrics["per_defect_auroc"] = per_defect_auroc(test)
     metrics["latency_bs1"] = latency_ms(model, size, device, cfg["latency_runs"])
 
     out = args.out / cat
     out.mkdir(parents=True, exist_ok=True)
     torch.save(model.state(), out / "model.pt")
+    (out / "scores.json").write_text(json.dumps({
+        split: {"scores": d["scores"].tolist(), "labels": d["labels"].tolist(),
+                "defect_types": d["defect_types"], "paths": d["paths"]}
+        for split, d in (("val", val), ("test", test))}))
     save_examples(test, args.data, metrics["threshold"], out / "examples.png")
     record = {"category": cat, "metrics": metrics, "fit": fit_stats, "model_config": model.config,
               "lineage": {"git_commit": git_commit(), "dataset_run_id": meta["run_id"],
                           "dataset_git_commit": meta["git_commit"], "device": str(device)}}
     (out / "metrics.json").write_text(json.dumps(record, indent=2))
-    t = metrics["test_at_val_threshold"]
+    t, ops = metrics["test_at_threshold"], metrics["operating_points"]
     print(f"[{cat}] img_AUROC={metrics['image_auroc']:.4f} px_AUROC={metrics['pixel_auroc']:.4f} "
-          f"AUPRO={metrics['aupro_30']:.4f} F1@val_thr={t['f1']:.3f} (oracle {metrics['test_oracle']['f1']:.3f}) "
-          f"FPR={t['fpr']:.3f} bank={fit_stats['bank_size']} fit={fit_stats['fit_seconds']}s "
+          f"AUPRO={metrics['aupro_30']:.4f} [{metrics['policy']}] F1={t['f1']:.3f} FPR={t['fpr']:.3f} "
+          f"recall={t['recall']:.3f} (oracle F1 {ops['oracle']['f1']:.3f}) "
+          f"bank={fit_stats['bank_size']} fit={fit_stats['fit_seconds']}s "
           f"lat_p50={metrics['latency_bs1']['p50_ms']:.1f}ms", flush=True)
     return record
 
 
 def write_summary(records: list[dict], out: Path) -> None:
     (out / "summary.json").write_text(json.dumps(records, indent=2))
-    rows = ["| Category | Image AUROC | Pixel AUROC | AUPRO@0.3 | F1 @ val thr | Oracle F1 | FPR @ val thr | Bank (MB) |",
-            "|---|---|---|---|---|---|---|---|"]
+    policy = records[0]["metrics"]["policy"]
+    target = records[0]["metrics"]["target_fpr"]
+    rows = ["| Category | Image AUROC | Pixel AUROC | AUPRO@0.3 | Bank (MB) | p50 latency (ms) |",
+            "|---|---|---|---|---|---|"]
     for r in records:
-        m, t = r["metrics"], r["metrics"]["test_at_val_threshold"]
+        m = r["metrics"]
         rows.append(f"| {r['category']} | {m['image_auroc']:.3f} | {m['pixel_auroc']:.3f} | {m['aupro_30']:.3f} | "
-                    f"{t['f1']:.3f} | {m['test_oracle']['f1']:.3f} | {t['fpr']:.3f} | {r['fit']['bank_mb']} |")
+                    f"{r['fit']['bank_mb']} | {m['latency_bs1']['p50_ms']:.1f} |")
     mean = lambda k: np.mean([r["metrics"][k] for r in records])  # noqa: E731
     rows.append(f"| **mean** | **{mean('image_auroc'):.3f}** | **{mean('pixel_auroc'):.3f}** | "
-                f"**{mean('aupro_30'):.3f}** | | | | |")
+                f"**{mean('aupro_30'):.3f}** | | |")
+
+    rows += ["", f"Operating point (threshold chosen on val only; primary policy `{policy}`, target FPR {target}):", "",
+             "| Category | val AUROC (synthetic) | F1 `val_f1` | FPR `val_f1` | F1 `normal_quantile` | "
+             "FPR `normal_quantile` | Oracle F1 | test/val normal-score ratio |",
+             "|---|---|---|---|---|---|---|---|"]
+    for r in records:
+        m, ops = r["metrics"], r["metrics"]["operating_points"]
+        a, b = ops["policies"]["val_f1"], ops["policies"]["normal_quantile"]
+        rows.append(f"| {r['category']} | {m['val_image_auroc']:.3f} | {a['f1']:.3f} | {a['fpr']:.3f} | "
+                    f"{b['f1']:.3f} | {b['fpr']:.3f} | {ops['oracle']['f1']:.3f} | "
+                    f"{ops['score_shift']['median_ratio_test_over_val']:.3f} |")
     lin = records[0]["lineage"]
     rows.append(f"\n_code `{lin['git_commit']}`, dataset run `{lin['dataset_run_id']}`, device `{lin['device']}`_")
     (out / "summary.md").write_text("\n".join(rows) + "\n")

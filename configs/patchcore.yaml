@@ -7,4 +7,10 @@ sigma: 4.0                    # Gaussian smoothing of the anomaly map
 batch_size: 16
 num_workers: 2
 seed: 0
+# Operating threshold, chosen on the VAL split only (see src/eval/metrics.py):
+#   normal_quantile -> false-reject rate on real normals <= target_fpr (default)
+#   val_f1          -> best F1 on val normals + synthetic defects (v1; transferred badly
+#                      when synthetic defects were much easier/harder than real ones)
+threshold_policy: normal_quantile
+target_fpr: 0.05
 latency_runs: 30              # batch-1 timing on the training device (target-CPU benchmark comes in Step 3b)
