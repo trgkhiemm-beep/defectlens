@@ -76,15 +76,6 @@ def test_preprocess_matches_training_transform(built):
     assert np.abs(preprocess(bgr, 256)[0] - ref).max() < 1e-5
 
 
-@pytest.fixture(scope="module")
-def edge(built, tmp_path_factory):
-    out = tmp_path_factory.mktemp("edge") / "edge"
-    subprocess.run([sys.executable, "scripts/build_edge.py", "--data", str(built[0]), "--out", str(out),
-                    "--ratios", "0.5", "0.05", "--save-all-max-ratio", "0.1", "--calib-size", "8",
-                    "--backbone", "resnet18", "--no-pretrained"], cwd=ROOT, check=True)
-    return out
-
-
 def test_build_edge_outputs(edge):
     m = json.loads((edge / "manifest.json").read_text())
     assert set(m["variants"]) == {f"{p}/{r}" for p in ("fp32", "int8", "int8mix") for r in ("r0.5", "r0.05")}
@@ -113,8 +104,9 @@ def test_edge_inspector_predict(edge):
 
 def test_benchmark_script(edge):
     subprocess.run([sys.executable, "scripts/benchmark.py", "--edge", str(edge), "--devices", "CPU",
-                    "--runs", "2", "--warmup", "1", "--no-pretrained"], cwd=ROOT, check=True)
+                    "--runs", "2", "--warmup", "1", "--cooldown", "0", "--repeats", "2", "--no-pretrained"], cwd=ROOT, check=True)
     md = (edge / "benchmark.md").read_text()
     assert "PyTorch eager" in md and "OpenVINO" in md and "INT8" in md
     res = json.loads((edge / "benchmark.json").read_text())["results"]
-    assert all(r["p50_ms"] > 0 for r in res)
+    assert all(r["p50_ms"] > 0 and r["repeats"] == 2 and r["p50_min_ms"] <= r["p50_ms"] <= r["p50_max_ms"]
+               for r in res)

@@ -20,3 +20,10 @@ env/
 
 # Intel GPU compiler debug dumps written by the OpenVINO GPU plugin
 kernel.errors.txt
+
+# Deployment bundle (built by scripts/export_bundle.py, shipped to the HF Space, not to git)
+/deploy/model/
+/dist/
+
+# Local editor/agent tooling
+.claude/

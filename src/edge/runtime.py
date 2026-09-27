@@ -9,20 +9,10 @@ import json
 import time
 from pathlib import Path
 
-import cv2
 import numpy as np
 import openvino as ov
 
-MEAN = np.array([0.485, 0.456, 0.406], np.float32)
-STD = np.array([0.229, 0.224, 0.225], np.float32)
-
-
-def preprocess(image_bgr: np.ndarray, size: int) -> np.ndarray:
-    """Same transform as training (prepare_data INTER_AREA resize + ImageNet normalisation)."""
-    if image_bgr.shape[:2] != (size, size):
-        image_bgr = cv2.resize(image_bgr, (size, size), interpolation=cv2.INTER_AREA)
-    rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-    return ((rgb - MEAN) / STD).transpose(2, 0, 1)[None].copy()
+from src.edge.preprocess import preprocess  # noqa: F401  (re-exported)
 
 
 class EdgeInspector:
@@ -32,6 +22,8 @@ class EdgeInspector:
         self.manifest = json.loads((self.dir / "manifest.json").read_text())
         self.size = self.manifest["image_size"]
         variant = self.manifest["variants"][f"{precision}/{bank}"]
+        self.reference_medians = {c: i["val_normal_median"] for c, i in variant["categories"].items()
+                                  if i.get("val_normal_median")}
         core = ov.Core()
         if cache_dir:  # compiled-blob cache: big cold-start win on iGPU
             core.set_property({"CACHE_DIR": str(cache_dir)})
@@ -46,6 +38,12 @@ class EdgeInspector:
         self.compile_ms = (time.perf_counter() - t0) * 1000
         if not self.scorers:
             raise ValueError(f"no scorer for {precision}/{bank} {categories or ''} in {self.dir}")
+
+    @classmethod
+    def from_bundle(cls, bundle_dir: str | Path, device: str = "CPU", **kw) -> "EdgeInspector":
+        """Load the deployment bundle written by scripts/export_bundle.py (its default variant)."""
+        d = json.loads((Path(bundle_dir) / "manifest.json").read_text())["default"]
+        return cls(bundle_dir, d["precision"], d["bank"], device, **kw)
 
     def embed(self, x: np.ndarray) -> np.ndarray:
         return self.embedder(x)[0]

@@ -147,7 +147,9 @@ def main() -> None:
                 info = {"bank_size": n, "threshold": m["threshold"], "scorer": None,
                         "image_auroc": m["image_auroc"], "pixel_auroc": m["pixel_auroc"], "aupro_30": m["aupro_30"],
                         "f1": m["test_at_threshold"]["f1"], "fpr": m["test_at_threshold"]["fpr"],
-                        "recall": m["test_at_threshold"]["recall"], "embed_seconds": round(embed_s, 1)}
+                        "recall": m["test_at_threshold"]["recall"], "embed_seconds": round(embed_s, 1),
+                        # drift-monitor reference: where normal parts scored at validation time
+                        "val_normal_median": m["operating_points"]["score_shift"]["val_normal_median"]}
                 if ratio <= args.save_all_max_ratio or cat == cats[0]:
                     scorer_cpu = Scorer(bank.cpu(), cfg["sigma"], size).eval()
                     rel = Path(precision) / f"r{ratio:g}" / cat / "scorer.xml"

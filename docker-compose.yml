@@ -1,0 +1,16 @@
+# Local run with the same limits as a free Hugging Face CPU Space (2 vCPU, 16 GB).
+#   python scripts/export_bundle.py && docker compose up --build   ->  http://localhost:7860
+services:
+  defectlens:
+    build: .
+    image: defectlens:latest
+    ports:
+      - "7860:7860"
+    environment:
+      DEFECTLENS_DEVICE: CPU
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2g
+    restart: unless-stopped

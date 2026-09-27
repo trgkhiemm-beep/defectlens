@@ -57,3 +57,12 @@ def built(tmp_path_factory):
     subprocess.run([sys.executable, "scripts/prepare_data.py", "--src", str(src), "--dst", str(dst),
                     "--config", str(cfg_path)], cwd=ROOT, check=True)
     return dst, cfg, src, cfg_path
+
+
+@pytest.fixture(scope="session")
+def edge(built, tmp_path_factory):
+    out = tmp_path_factory.mktemp("edge") / "edge"
+    subprocess.run([sys.executable, "scripts/build_edge.py", "--data", str(built[0]), "--out", str(out),
+                    "--ratios", "0.5", "0.05", "--save-all-max-ratio", "0.1", "--calib-size", "8",
+                    "--backbone", "resnet18", "--no-pretrained"], cwd=ROOT, check=True)
+    return out

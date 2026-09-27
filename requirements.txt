@@ -1,4 +1,4 @@
-# Steps 2-3b (data, PatchCore, OpenVINO edge). API/UI deps are added in Step 4.
+# Training, evaluation and tests. Serving-only deps: requirements-serve.txt (included below).
 # On Windows install with: pip install --prefer-binary -r requirements.txt
 numpy>=1.26
 opencv-python-headless>=4.9
@@ -9,3 +9,5 @@ torchvision>=0.17
 openvino>=2024.4
 nncf>=2.13
 pytest>=8.0
+httpx>=0.27          # FastAPI TestClient
+-r requirements-serve.txt

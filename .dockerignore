@@ -1,0 +1,10 @@
+# Allow-list: only what the serving image needs.
+*
+!requirements-serve.txt
+!src/__init__.py
+!src/edge/__init__.py
+!src/edge/preprocess.py
+!src/edge/runtime.py
+!app/
+!deploy/model/
+**/__pycache__
