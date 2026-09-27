@@ -8,6 +8,6 @@ venv/
 .venv/
 env/
 
-# Generated data & reports
-data/
-reports/
+# Generated data & reports -- anchored with "/" so src/data/ is NOT ignored
+/data/
+/reports/
