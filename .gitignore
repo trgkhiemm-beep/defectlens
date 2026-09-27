@@ -1,3 +1,13 @@
-venv/
+# Python
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# Virtual environments (never commit: hundreds of MB, OS-specific)
+venv/
+.venv/
+env/
+
+# Generated data & reports
+data/
+reports/

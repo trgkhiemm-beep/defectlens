@@ -1,3 +1,18 @@
+"""Pre-process MVTec AD into a compact, reproducible, VALIDATED dataset.
+
+  python scripts/prepare_data.py --src /kaggle/input/mvtec-ad --dst data/processed --overwrite
+
+Output:
+  <dst>/<category>/{train,val,test}/...png
+  <dst>/manifest.csv        one row per image (source_path = clean image a synthetic defect was made from)
+  <dst>/dataset_meta.json   git commit, code fingerprint, config, counts, validation result
+  <dst>/prepare_data.log    full log of THIS run (never paste logs from memory: read this file)
+Splits:
+  train : (1 - val_ratio) of train/good          (fit the model)
+  val   : val_ratio of train/good + synthetic     (pick threshold)
+  test  : official MVTec test set                 (report ONLY, never tuned on)
+Exit code 1 if validation fails -> a notebook / CI step stops right here.
+"""
 from __future__ import annotations
 
 import argparse
@@ -19,7 +34,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from src.data.synthetic import SYNTHETIC_VERSION, inspection_region, synthesize_defect  # noqa: E402
-from src.data.validate import FIELDS, code_fingerprint, validate_dataset  # noqa: E402
+from src.data.validate import FIELDS, code_fingerprint, preflight, validate_dataset  # noqa: E402
 
 log = logging.getLogger("prepare_data")
 
@@ -114,6 +129,11 @@ def main() -> None:
     ap.add_argument("--config", default=ROOT / "configs/data.yaml", type=Path)
     ap.add_argument("--overwrite", action="store_true", help="delete an existing --dst first")
     args = ap.parse_args()
+
+    problems = preflight()
+    if problems:
+        sys.exit("PREFLIGHT FAILED (repo has mixed old/new files; replace the whole repo):\n  "
+                 + "\n  ".join(problems))
 
     # Stale files from an older run silently mixing into a new dataset is a classic bug.
     if args.dst.exists() and any(args.dst.iterdir()):

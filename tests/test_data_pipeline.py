@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 from src.data.dataset import AnomalyDataset, make_loader  # noqa: E402
 from src.data.synthetic import inspection_region, synthesize_defect  # noqa: E402
 from src.data.transforms import CORRUPTIONS, build_corruption_transform, build_eval_transform, build_train_transform  # noqa: E402
-from src.data.validate import validate_dataset  # noqa: E402
+from src.data.validate import preflight, validate_dataset  # noqa: E402
 
 TRANSISTOR_ROI = [0.28, 0.15, 0.78, 0.95]
 
@@ -102,6 +102,18 @@ def test_roi_defect_is_single_visible_region():
 
 
 # ---------- build + validation gate ----------
+def test_preflight_passes_on_consistent_repo():
+    assert preflight() == []
+
+
+def test_preflight_catches_old_synthetic_module(monkeypatch):
+    from src.data import synthetic, validate
+    monkeypatch.setattr(validate, "SYNTHETIC_VERSION", 2)
+    monkeypatch.setattr(synthetic, "mask_contrast", lambda a, b: 0.0)  # old 2-arg API
+    errors = preflight()
+    assert any("v2" in e for e in errors) and any("API mismatch" in e for e in errors)
+
+
 def test_build_passes_validation(built):
     dst, cfg, *_ = built
     errors, stats = validate_dataset(dst, cfg)

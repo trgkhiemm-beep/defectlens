@@ -1,3 +1,9 @@
+"""Data validation gate: re-checks a built dataset FROM DISK against the config
+and the current code. Any error -> non-zero exit, so training never starts on a
+stale or broken dataset.
+
+  python -m src.data.validate --data data/processed --config configs/data.yaml
+"""
 from __future__ import annotations
 
 import argparse
@@ -12,12 +18,35 @@ import cv2
 import numpy as np
 import yaml
 
-from src.data.synthetic import SYNTHETIC_VERSION, inspection_region, mask_contrast
+from src.data import synthetic
+from src.data.synthetic import SYNTHETIC_VERSION, inspection_region
 
 ROOT = Path(__file__).resolve().parents[2]
 FIELDS = ["split", "category", "image_path", "mask_path", "label", "defect_type", "source_path"]
 # Files whose content defines the dataset; their hash goes into dataset_meta.json.
 FINGERPRINT_FILES = ["configs/data.yaml", "scripts/prepare_data.py", "src/data/synthetic.py"]
+
+
+# The version of src/data/synthetic.py this validator (and prepare_data.py) was written for.
+EXPECTED_SYNTHETIC_VERSION = 3
+
+
+def preflight() -> list[str]:
+    """Fail in <1 s, before any processing, if the repo has a mix of old and new
+    files (e.g. an updated prepare_data.py next to an old synthetic.py)."""
+    errors = []
+    if SYNTHETIC_VERSION != EXPECTED_SYNTHETIC_VERSION:
+        errors.append(f"src/data/synthetic.py is v{SYNTHETIC_VERSION}, pipeline expects "
+                      f"v{EXPECTED_SYNTHETIC_VERSION} -> that file was not updated")
+    try:  # exercise the exact call signatures the pipeline relies on
+        rng = np.random.default_rng(0)
+        img = rng.integers(0, 255, (64, 64, 3), dtype=np.uint8)
+        region = inspection_region(img, "none", [0.25, 0.25, 0.75, 0.75])
+        bad, mask, _ = synthetic.synthesize_defect(img, rng, region=region, min_contrast=20.0)
+        synthetic.mask_contrast(img, bad, mask)
+    except Exception as e:  # noqa: BLE001 - report any API mismatch clearly
+        errors.append(f"src/data/synthetic.py API mismatch: {type(e).__name__}: {e}")
+    return errors
 
 
 def code_fingerprint() -> dict[str, str]:
@@ -101,7 +130,7 @@ def validate_dataset(data: Path, cfg: dict, check_meta: bool = True) -> tuple[li
                 errors.append(f"{tag}: image changed outside the mask (mask is not ground truth)")
             if kind != "scratch" and cv2.connectedComponents(mask)[0] != 2:
                 errors.append(f"{tag}: blob defect has more than one region")
-            c = mask_contrast(src, img, mask)
+            c = synthetic.mask_contrast(src, img, mask)
             contrasts.append(c)
             if c < min_contrast:
                 errors.append(f"{tag}: defect nearly invisible (contrast {c:.1f} < {min_contrast})")

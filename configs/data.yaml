@@ -1,22 +1,42 @@
+# DefectLens data config.
+# Augmentation is CATEGORY-AWARE on purpose: in anomaly detection, an augmentation
+# that is harmless for classification can turn a normal sample into a "defect".
+#   - metal_nut: the "flip" defect IS a mirrored nut -> any flip forbidden.
+#                BUT in-plane rotation already varies in the train set -> rotation is safe.
+#   - capsule:   printed "500" text -> any flip creates mirrored text (abnormal).
+#   - transistor:"misplaced" defect = rotated/shifted part -> no rotation.
+#   - carpet:    stationary texture -> flips/rot90 are safe.
+#
+# Synthetic-defect region (where a fake defect may appear):
+#   foreground: color -> object vs uniform background (capsule, metal_nut)
+#   foreground: none  -> no colour segmentation
+#   roi: [x0,y0,x1,y1] normalised inspection window (fixed fixture position).
+#        transistor sits on a cluttered PCB, so colour segmentation fails; the
+#        ROI keeps defects on the part (margin covers the observed +-5% shift).
+
 image_size: 256
-val_ratio: 0.2
+val_ratio: 0.2          # fraction of train/good held out for threshold selection
+                        # (0.1 gave only ~21 normals -> FPR measured in 5% steps)
 synthetic_per_category: 60
+min_val_good: 30        # validation gate: fewer val normals -> threshold too noisy
+min_contrast: 20.0      # validation gate: mean |change| inside a synthetic mask (0-255)
 seed: 42
 
 categories:
   transistor:
     industry: electronics
-    foreground: false
+    foreground: none
+    roi: [0.28, 0.15, 0.78, 0.95]
     augment: {hflip: false, vflip: false, rot90: false, max_rotate: 0}
   capsule:
     industry: pharmaceutical
-    foreground: true
+    foreground: color
     augment: {hflip: false, vflip: false, rot90: false, max_rotate: 2}
   metal_nut:
     industry: mechanical
-    foreground: true
-    augment: {hflip: false, vflip: false, rot90: false, max_rotate: 0}
+    foreground: color
+    augment: {hflip: false, vflip: false, rot90: false, max_rotate: 20}
   carpet:
     industry: textile
-    foreground: false
+    foreground: none
     augment: {hflip: true, vflip: true, rot90: true, max_rotate: 0}

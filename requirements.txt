@@ -1,3 +1,5 @@
+# Step 2 (data). Model/deploy deps are added in Steps 3-4.
+# On Windows install with: pip install --prefer-binary -r requirements.txt
 numpy>=1.26
 opencv-python-headless>=4.9
 albumentations>=2.0,<3
