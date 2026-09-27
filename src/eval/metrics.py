@@ -135,3 +135,23 @@ def evaluate(val: dict, test: dict, policy: str = "normal_quantile", target_fpr:
         "test_at_threshold": ops["policies"][policy],
         "operating_points": ops,
     }
+
+
+def recalibration(test: dict, k: int, target_fpr: float = 0.05, repeats: int = 50, seed: int = 0) -> dict:
+    """Post-deployment recalibration under drift: draw k NEW normal images (here: from the
+    test normals), set the threshold as their (1 - target_fpr) quantile, and evaluate on
+    the remaining test images only (calibration images never scored). Mean/std over draws."""
+    scores, labels = np.asarray(test["scores"]), np.asarray(test["labels"])
+    normal_idx = np.flatnonzero(labels == 0)
+    if k >= len(normal_idx):
+        raise ValueError(f"k={k} leaves no normal test images to evaluate")
+    rng = np.random.default_rng(seed)
+    f1s, fprs, recalls = [], [], []
+    for _ in range(repeats):
+        calib = rng.choice(normal_idx, size=k, replace=False)
+        keep = np.setdiff1d(np.arange(len(scores)), calib)
+        thr = float(np.quantile(scores[calib], 1.0 - target_fpr))
+        st = binary_stats(scores[keep], labels[keep], thr)
+        f1s.append(st["f1"]), fprs.append(st["fpr"]), recalls.append(st["recall"])
+    return {"k": k, "f1_mean": float(np.mean(f1s)), "f1_std": float(np.std(f1s)),
+            "fpr_mean": float(np.mean(fprs)), "recall_mean": float(np.mean(recalls))}

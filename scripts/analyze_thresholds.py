@@ -3,8 +3,9 @@
   python scripts/analyze_thresholds.py --artifacts artifacts/patchcore
 
 For each category: every threshold policy chosen on VAL, evaluated on TEST, next to
-the test oracle; the val/test normal-score shift; and recall per defect type at the
-primary operating point (which real defects the line would let through).
+the test oracle; the val/test normal-score shift; a drift-recalibration experiment
+(k new normal images); and recall per defect type at the primary operating point
+(which real defects the line would let through).
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from src.eval.metrics import best_f1_threshold, binary_stats, score_shift, select_threshold  # noqa: E402
+from src.eval.metrics import best_f1_threshold, binary_stats, recalibration, score_shift, select_threshold  # noqa: E402
 
 
 def load(path: Path) -> tuple[dict, dict]:
@@ -43,6 +44,15 @@ def analyze(cat: str, val: dict, test: dict, fprs: list[float], primary_fpr: flo
     lines += ["", f"Normal-score shift: val median {sh['val_normal_median']:.3f} -> test median "
               f"{sh['test_normal_median']:.3f} (x{sh['median_ratio_test_over_val']:.2f}); "
               f"p95 {sh['val_normal_p95']:.3f} -> {sh['test_normal_p95']:.3f}"]
+
+    n_normal = int((test["labels"] == 0).sum())
+    lines += ["", f"Recalibration with k NEW normal images (drawn from the {n_normal} test normals, excluded from "
+              f"scoring; 50 random draws, target FPR {primary_fpr:.0%}):", "",
+              "| k | F1 (mean +- std) | Recall | FPR |", "|---|---|---|---|"]
+    for k in (5, 10):
+        if k < n_normal - 1:
+            r = recalibration(test, k, primary_fpr)
+            lines.append(f"| {k} | {r['f1_mean']:.3f} +- {r['f1_std']:.3f} | {r['recall_mean']:.3f} | {r['fpr_mean']:.3f} |")
 
     thr = select_threshold(val, "normal_quantile", primary_fpr)
     types = np.array(test["defect_types"])

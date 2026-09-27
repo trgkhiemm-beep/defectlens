@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.data.validate import load_ready_dataset  # noqa: E402
-from src.eval.metrics import aupro, auroc, best_f1_threshold, evaluate, score_shift, select_threshold  # noqa: E402
+from src.eval.metrics import aupro, auroc, best_f1_threshold, evaluate, recalibration, score_shift, select_threshold  # noqa: E402
 from src.models.patchcore import PatchCore, greedy_coreset  # noqa: E402
 
 
@@ -62,6 +62,16 @@ def test_normal_quantile_ignores_synthetic_defects():
     t = select_threshold(easy, "normal_quantile", 0.05)
     assert t == select_threshold(hard, "normal_quantile", 0.05)
     assert (normals >= t).mean() == pytest.approx(0.05, abs=0.002)
+
+
+def test_recalibration_recovers_from_drift():
+    rng = np.random.default_rng(0)
+    val = {"scores": np.r_[rng.normal(1.0, 0.05, 50), [3.0]], "labels": np.r_[np.zeros(50), [1]]}
+    test = {"scores": np.r_[rng.normal(1.5, 0.05, 60), np.full(40, 3.0)], "labels": np.r_[np.zeros(60), np.ones(40)]}
+    thr = select_threshold(val, "normal_quantile", 0.05)
+    assert (test["scores"][:60] >= thr).mean() > 0.9  # drift: old threshold rejects almost all good parts
+    r = recalibration(test, k=10, target_fpr=0.05)
+    assert r["fpr_mean"] < 0.2 and r["recall_mean"] == 1.0
 
 
 def test_score_shift_detects_drift():
