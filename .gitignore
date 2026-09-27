@@ -14,3 +14,9 @@ env/
 
 # Trained models, metrics, figures
 /artifacts/
+
+# Downloaded archives (e.g. edge.zip from Kaggle)
+*.zip
+
+# Intel GPU compiler debug dumps written by the OpenVINO GPU plugin
+kernel.errors.txt
