@@ -1,0 +1,10 @@
+# PatchCore baseline (Roth et al. 2022). Values follow the paper's MVTec setup.
+backbone: wide_resnet50_2     # ImageNet-pretrained, frozen (no training of weights)
+layers: [layer2, layer3]      # mid-level features: local texture + some context
+coreset_ratio: 0.1            # keep 10% of normal patches in the memory bank
+max_bank: null                # optional hard cap on bank size (edge deployment, Step 3b)
+sigma: 4.0                    # Gaussian smoothing of the anomaly map
+batch_size: 16
+num_workers: 2
+seed: 0
+latency_runs: 30              # batch-1 timing on the training device (target-CPU benchmark comes in Step 3b)

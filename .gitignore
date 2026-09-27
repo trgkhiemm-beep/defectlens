@@ -11,3 +11,6 @@ env/
 # Generated data & reports -- anchored with "/" so src/data/ is NOT ignored
 /data/
 /reports/
+
+# Trained models, metrics, figures
+/artifacts/

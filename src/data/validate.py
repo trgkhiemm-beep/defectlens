@@ -53,6 +53,20 @@ def code_fingerprint() -> dict[str, str]:
     return {f: hashlib.sha256((ROOT / f).read_bytes()).hexdigest()[:12] for f in FINGERPRINT_FILES}
 
 
+def load_ready_dataset(data: Path) -> dict:
+    """Cheap gate for downstream jobs (training, eval): the dataset must have passed
+    validation and match the current generator version. Returns dataset_meta."""
+    meta_path = Path(data) / "dataset_meta.json"
+    if not meta_path.exists():
+        raise RuntimeError(f"{meta_path} missing: run scripts/prepare_data.py first")
+    meta = json.loads(meta_path.read_text())
+    if not meta.get("validation", {}).get("passed"):
+        raise RuntimeError(f"dataset run={meta.get('run_id')} did not pass validation: {meta.get('validation')}")
+    if meta.get("synthetic_version") != SYNTHETIC_VERSION:
+        raise RuntimeError(f"dataset is synthetic_v{meta.get('synthetic_version')}, code is v{SYNTHETIC_VERSION}: rebuild")
+    return meta
+
+
 def _read(path: Path, flags: int) -> np.ndarray:
     img = cv2.imread(str(path), flags)
     if img is None:

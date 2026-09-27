@@ -1,8 +1,9 @@
-# Step 2 (data). Model/deploy deps are added in Steps 3-4.
+# Steps 2-3 (data + PatchCore). Deploy deps are added in Step 4.
 # On Windows install with: pip install --prefer-binary -r requirements.txt
 numpy>=1.26
 opencv-python-headless>=4.9
 albumentations>=2.0,<3
 pyyaml>=6.0
 torch>=2.2
+torchvision>=0.17
 pytest>=8.0
