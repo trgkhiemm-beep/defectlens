@@ -1,0 +1,5 @@
+# Linux containers (Docker / HF Spaces / CI) need LF: a CRLF Dockerfile breaks multi-line RUN.
+* text=auto eol=lf
+*.png binary
+*.bin binary
+*.zip binary

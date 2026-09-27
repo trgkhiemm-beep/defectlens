@@ -12,8 +12,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = ["Dockerfile", ".dockerignore", "requirements-serve.txt", "src/__init__.py",
-         "src/edge/__init__.py", "src/edge/preprocess.py", "src/edge/runtime.py", "app/__init__.py", "app/api.py", "app/main.py",
-         "app/service.py", "app/ui.py"]
+         "src/edge/__init__.py", "src/edge/preprocess.py", "src/edge/runtime.py", "app/__init__.py", "app/api.py",
+         "app/main.py", "app/service.py", "app/ui.py"]
+CRLF, LF = bytes([13, 10]), bytes([10])
 
 
 def main() -> None:
@@ -25,11 +26,11 @@ def main() -> None:
         raise SystemExit(f"{args.model} has no bundle: run scripts/export_bundle.py first")
     if args.out.exists():
         shutil.rmtree(args.out)
-    for f in FILES:
+    for f in FILES:  # text files, written with LF endings whatever the local git/editor settings
         (args.out / f).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(ROOT / f, args.out / f)
+        (args.out / f).write_bytes((ROOT / f).read_bytes().replace(CRLF, LF))
     shutil.copytree(args.model, args.out / "deploy/model")
-    shutil.copy(ROOT / "deploy/space/README.md", args.out / "README.md")
+    (args.out / "README.md").write_bytes((ROOT / "deploy/space/README.md").read_bytes().replace(CRLF, LF))
     size = sum(p.stat().st_size for p in args.out.rglob("*") if p.is_file()) / 2**20
     print(f"Space context -> {args.out} ({size:.1f} MB). Upload with:\n"
           f"  huggingface-cli upload <hf-user>/defectlens {args.out} . --repo-type=space")
