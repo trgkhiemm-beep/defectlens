@@ -1,28 +1,17 @@
 Hardware: CPU: 11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz, GPU: Intel(R) Iris(R) Xe Graphics (iGPU)  
-Batch 1, 256x256, `transistor` sample, p50 over 30 runs after warm-up, end to end (preprocess + embed + score).
+Batch 1, 256x256, `transistor` sample, end to end (preprocess + embed + score). One process per configuration, 25 s cool-down before each, warm-up, then up to 30 runs or 6 s; 3 round-robin repeats, p50 = median over repeats [min-max]. Burst latency: a 15 W laptop is slower under sustained load.
 
-| Runtime | Device | Embedder | Bank | p50 (ms) | p95 (ms) | FPS | Embed / Score p50 (ms) | Speed-up | Mean img AUROC | Load/compile (s) | Disk (MB) |
+| Runtime | Device | Embedder | Bank | p50 (ms) [spread] | p95 (ms) | FPS | Embed / Score p50 (ms) | Speed-up vs PyTorch r0.1 | Mean img AUROC | Load/compile (s) | Disk (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| PyTorch eager | CPU | FP32 | r0.1 (17510) | 2781.1 | 3462.9 | 0.4 | 1185.2 / 1608.4 | x1.0 | (= fp32 OV) | 18.5 | 197.4 |
-| PyTorch eager | CPU | FP32 | r0.01 (1751) | 1497.7 | 1997.1 | 0.7 | 1265.0 / 215.0 | x1.9 | (= fp32 OV) | 4.0 | 105.1 |
-| PyTorch eager | CPU | FP32 | r0.001 (175) | 1565.5 | 1780.7 | 0.6 | 1486.3 / 66.0 | x1.8 | (= fp32 OV) | 4.3 | 95.9 |
-| OpenVINO | CPU | FP32 | r0.1 (17510) | 2250.3 | 2522.4 | 0.4 | 715.3 / 1518.9 | x1.2 | 0.9888 | 4.9 | 146.1 |
-| OpenVINO | CPU | FP32 | r0.01 (1751) | 877.2 | 1096.5 | 1.1 | 683.0 / 174.6 | x3.2 | 0.9880 | 1.9 | 99.9 |
-| OpenVINO | CPU | FP32 | r0.001 (175) | 657.3 | 753.3 | 1.5 | 605.5 / 43.2 | x4.2 | 0.9784 | 1.8 | 95.3 |
-| OpenVINO | CPU | INT8 | r0.1 (17510) | 1636.6 | 1950.9 | 0.6 | 186.3 / 1431.0 | x1.7 | 0.9881 | 5.1 | 75.2 |
-| OpenVINO | CPU | INT8 | r0.01 (1751) | 354.3 | 506.6 | 2.8 | 177.9 / 166.3 | x7.8 | 0.9878 | 3.2 | 28.9 |
-| OpenVINO | CPU | INT8 | r0.001 (175) | 189.6 | 243.7 | 5.3 | 148.4 / 36.5 | x14.7 | 0.9723 | 2.7 | 24.3 |
-| OpenVINO | CPU | INT8MIX | r0.1 (17510) | 1654.0 | 1750.5 | 0.6 | 178.1 / 1464.9 | x1.7 | 0.9887 | 2.3 | 75.2 |
-| OpenVINO | CPU | INT8MIX | r0.01 (1751) | 353.4 | 414.2 | 2.8 | 175.8 / 164.3 | x7.9 | 0.9872 | 1.4 | 28.9 |
-| OpenVINO | CPU | INT8MIX | r0.001 (175) | 249.9 | 308.1 | 4.0 | 197.6 / 45.0 | x11.1 | 0.9770 | 1.5 | 24.3 |
-| OpenVINO | GPU | FP32 | r0.1 (17510) | 545.7 | 731.5 | 1.8 | 111.5 / 429.2 | x5.1 | 0.9888 | 25.1 | 146.1 |
-| OpenVINO | GPU | FP32 | r0.01 (1751) | 206.8 | 255.0 | 4.8 | 134.4 / 62.8 | x13.4 | 0.9880 | 15.9 | 99.9 |
-| OpenVINO | GPU | FP32 | r0.001 (175) | 156.1 | 182.0 | 6.4 | 125.0 / 16.7 | x17.8 | 0.9784 | 15.3 | 95.3 |
-| OpenVINO | GPU | INT8 | r0.1 (17510) | 499.3 | 602.0 | 2.0 | 56.7 / 435.2 | x5.6 | 0.9881 | 27.4 | 75.2 |
-| OpenVINO | GPU | INT8 | r0.01 (1751) | 136.7 | 198.9 | 7.3 | 62.2 / 65.2 | x20.4 | 0.9878 | 25.8 | 28.9 |
-| OpenVINO | GPU | INT8 | r0.001 (175) | 101.5 | 173.0 | 9.8 | 78.7 / 14.5 | x27.4 | 0.9723 | 25.9 | 24.3 |
-| OpenVINO | GPU | INT8MIX | r0.1 (17510) | 467.2 | 631.8 | 2.1 | 56.2 / 403.6 | x6.0 | 0.9887 | 28.1 | 75.2 |
-| OpenVINO | GPU | INT8MIX | r0.01 (1751) | 206.0 | 1311.6 | 4.9 | 120.2 / 103.8 | x13.5 | 0.9872 | 27.1 | 28.9 |
-| OpenVINO | GPU | INT8MIX | r0.001 (175) | 109.7 | 138.8 | 9.1 | 85.9 / 16.7 | x25.4 | 0.9770 | 26.7 | 24.3 |
+| PyTorch eager | CPU | FP32 | r0.1 (17510) | 1925.3 [1646-2407] | 2548.2 | 0.5 | 879.0 / 1038.4 | x1.0 | (= OV FP32) | 1.0 | 197.4 |
+| PyTorch eager | CPU | FP32 | r0.01 (1751) | 193.5 [188-624] | 792.4 | 5.2 | 157.1 / 37.0 | x9.9 | (= OV FP32) | 0.9 | 105.1 |
+| OpenVINO | CPU | FP32 | r0.1 (17510) | 230.9 [229-553] | 1546.4 | 4.3 | 68.4 / 162.0 | x8.3 | 0.9888 | 0.3 | 146.1 |
+| OpenVINO | CPU | FP32 | r0.01 (1751) | 87.8 [88-89] | 90.0 | 11.4 | 66.4 / 20.1 | x21.9 | 0.9880 | 0.2 | 99.9 |
+| OpenVINO | CPU | INT8 | r0.1 (17510) | 183.3 [183-192] | 1382.5 | 5.5 | 21.0 / 160.9 | x10.5 | 0.9881 | 0.6 | 75.2 |
+| OpenVINO | CPU | INT8 | r0.01 (1751) | 41.0 [41-42] | 42.5 | 24.4 | 19.7 / 20.2 | x46.9 | 0.9878 | 0.3 | 28.9 |
+| OpenVINO | GPU | FP32 | r0.1 (17510) | 266.6 [135-350] | 376.0 | 3.8 | 61.3 / 196.4 | x7.2 | 0.9888 | 4.9 | 146.1 |
+| OpenVINO | GPU | FP32 | r0.01 (1751) | 33.4 [33-126] | 42.9 | 30.0 | 21.0 / 10.6 | x57.7 | 0.9880 | 4.4 | 99.9 |
+| OpenVINO | GPU | INT8 | r0.1 (17510) | 428.8 [310-450] | 570.2 | 2.3 | 65.3 / 365.3 | x4.5 | 0.9881 | 13.3 | 75.2 |
+| OpenVINO | GPU | INT8 | r0.01 (1751) | 54.1 [50-62] | 62.4 | 18.5 | 29.3 / 21.4 | x35.6 | 0.9878 | 7.2 | 28.9 |
 
-_code `f621d127-dirty`, OpenVINO 2026.4.0-22959-99c81491cc3-releases/2026/4, torch 2.14.0+cpu, Windows-11-10.0.26200-SP0_
+_code `16e4e17a-dirty`, torch 2.14.0+cpu, Windows-11-10.0.26200-SP0_
