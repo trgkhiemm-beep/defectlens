@@ -21,7 +21,19 @@ jobs:
           # failing tests become GitHub annotations: readable in the UI and via the public API
           pip install pytest-github-actions-annotate-failures
       - name: Tests
-        run: pytest -q -rfE --tb=short -W ignore::FutureWarning
+        run: |
+          set -o pipefail
+          pytest -q -rfE --tb=short -W ignore::FutureWarning 2>&1 | tee pytest.log
+      - name: Surface pytest summary as annotations
+        # Job logs need a login to read; annotations are public (also via the REST API).
+        if: failure()
+        shell: python
+        run: |
+          lines = open("pytest.log", encoding="utf-8", errors="replace").read().splitlines()
+          keep = [l for l in lines if l.startswith(("FAILED", "ERROR", "E ")) or "Error" in l][:80]
+          esc = lambda l: l.replace("%", "%25").replace("::", ": :")
+          body = "%0A".join(esc(l) for l in keep + ["---- tail ----"] + lines[-40:])
+          print(f"::error title=pytest summary::{body}")
 
   docker:
     runs-on: ubuntu-latest
