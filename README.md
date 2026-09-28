@@ -149,7 +149,7 @@ src/models/     PatchCore: Embedder, Scorer, greedy coreset
 src/eval/       AUROC, AUPRO, threshold policies, drift and recalibration analysis
 src/edge/       OpenVINO export + INT8, runtime (EdgeInspector), preprocessing
 scripts/        prepare_data, train_patchcore, analyze_thresholds, build_edge, benchmark,
-                export_bundle, export_web, make_space, serve_web,
+                export_bundle, export_web, serve_web,
                 make_test_pack, inspect_folder, make_edge_cases (testing)
 app/            FastAPI service (+ drift monitor) and Gradio UI
 web/            static in-browser demo (ONNX Runtime Web)
