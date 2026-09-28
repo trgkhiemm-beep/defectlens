@@ -1,16 +1,3 @@
-"""Export the in-browser build (ONNX Runtime Web) of one edge variant into web/models.
-
-  python scripts/export_web.py --edge artifacts/edge --variant fp32/r0.01
-
-Why FP32 (not INT8) for the browser: the INT8 embedder is an OpenVINO/NNCF graph and the
-memory bank must come from the SAME network as the query features. The fp32 variant's
-bank was built from FP32 features, so an FP32 ONNX embedder reproduces it exactly.
-Weights are STORED as FP16 (+ Cast to FP32 at load), halving the download while compute
-stays FP32; the scorer banks were already FP16 on disk.
-
-Every exported pair is checked against the OpenVINO pipeline on the sample images
-(score within 1%, identical verdict) before anything is written as "ready".
-"""
 from __future__ import annotations
 
 import argparse
