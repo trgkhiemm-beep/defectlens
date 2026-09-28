@@ -26,7 +26,7 @@ electronics (`transistor`), pharmaceuticals (`capsule`), mechanical parts (`meta
 | Edge model (OpenVINO INT8 backbone + 1% memory bank) | **41 ms / 24 FPS** on an i5-1135G7 CPU, **4.7x faster** than PyTorch eager with the same bank, AUROC -0.001 |
 | Size | **47.5 MB** deployment bundle for all 4 categories (vs 197 MB for one PyTorch FP32 model with a 10% bank) |
 | Browser build | 70 MB ONNX, scores identical to the Python pipeline to 4 decimals |
-| Engineering | data validation gate, dataset lineage, 45 tests, CI (tests + Docker build) |
+| Engineering | data validation gate, dataset lineage, 48 tests, CI (tests + Docker build) |
 
 ## Architecture
 
@@ -149,10 +149,11 @@ src/models/     PatchCore: Embedder, Scorer, greedy coreset
 src/eval/       AUROC, AUPRO, threshold policies, drift and recalibration analysis
 src/edge/       OpenVINO export + INT8, runtime (EdgeInspector), preprocessing
 scripts/        prepare_data, train_patchcore, analyze_thresholds, build_edge, benchmark,
-                export_bundle, export_web, make_space, serve_web
+                export_bundle, export_web, make_space, serve_web,
+                make_test_pack, inspect_folder, make_edge_cases (testing)
 app/            FastAPI service (+ drift monitor) and Gradio UI
 web/            static in-browser demo (ONNX Runtime Web)
-tests/          45 tests, all on small generated data (no downloads)
+tests/          48 tests, all on small generated data (no downloads)
 docs/results/   accuracy and benchmark tables
 ```
 
@@ -190,7 +191,7 @@ python scripts/export_web.py --edge artifacts/edge --variant fp32/r0.01
 python scripts/serve_web.py   # http://127.0.0.1:8765, with the COOP/COEP headers multi-threaded WASM needs
 ```
 
-**Tests:** `pytest -q` (runs on CPU with small generated images).
+**Tests:** `pytest -q` (runs on CPU with small generated images). Full testing guide, including how to get test images: [docs/TESTING.md](docs/TESTING.md) (Vietnamese).
 
 ## References
 

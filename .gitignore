@@ -31,3 +31,7 @@ kernel.errors.txt
 # Generated in-browser build (scripts/export_web.py), uploaded to the HF Space, not to git
 /web/models/
 /web/samples/
+
+# Local test inputs and packs (docs/TESTING.md)
+/test_inputs/
+/test_pack/

@@ -124,3 +124,15 @@ def test_loader_and_transforms(built):
     for name in CORRUPTIONS:
         ds_c = AnomalyDataset(built[0], "transistor", "test", build_corruption_transform(name, 256))
         assert ds_c[0]["image"].shape == (3, 256, 256), name
+
+
+def test_make_test_pack_uses_only_test_split(built, tmp_path):
+    out = tmp_path / "pack"
+    subprocess.run([sys.executable, "scripts/make_test_pack.py", "--data", str(built[0]), "--out", str(out),
+                    "--per-type", "2", "--with-masks"], cwd=ROOT, check=True)
+    with open(out / "manifest.csv", newline="") as f:
+        rows = list(csv.DictReader(f))
+    assert {(r["category"], r["defect_type"]) for r in rows} == {
+        (c, t) for c in ("metal_nut", "transistor") for t in ("good", "scratch")}
+    assert all((out / r["file"]).exists() and "/test/" not in r["file"] for r in rows)
+    assert len(rows) == 8 and len(list(out.rglob("ground_truth/*/*.png"))) == 4

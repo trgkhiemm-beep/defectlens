@@ -99,3 +99,33 @@ def test_drift_monitor_warm_up_reference():
     for _ in range(3):
         d.update(2.0)
     assert d.status()["state"] == "ok"
+
+
+def test_inspect_folder_scores_labelled_folders(bundle, tmp_path):
+    import json
+    import shutil
+    imgs = tmp_path / "pack"
+    for sub, name in (("good", "transistor_good.png"), ("scratch", "transistor_defect.png")):
+        (imgs / sub).mkdir(parents=True)
+        shutil.copy(bundle / "samples" / name, imgs / sub / name)
+    (imgs / "ground_truth" / "scratch").mkdir(parents=True)  # masks must be ignored
+    shutil.copy(bundle / "samples" / "transistor_defect.png", imgs / "ground_truth" / "scratch" / "m.png")
+    out = tmp_path / "out"
+    subprocess.run([sys.executable, "scripts/inspect_folder.py", "--images", str(imgs), "--category", "transistor",
+                    "--model", str(bundle), "--out", str(out), "--overlays"], cwd=ROOT, check=True)
+    s = json.loads((out / "summary.json").read_text())
+    assert s["images"] == 2 and s["labelled"] == 2 and 0 <= s["accuracy"] <= 1
+    assert set(s["recall_per_defect_type"]) == {"scratch"}
+    assert len(list((out / "overlays").rglob("*.png"))) == 2
+
+
+def test_api_rejects_every_malformed_edge_case(client, bundle, tmp_path):
+    out = tmp_path / "edge"
+    subprocess.run([sys.executable, "scripts/make_edge_cases.py", "--sample",
+                    str(bundle / "samples" / "transistor_good.png"), "--out", str(out), "--no-large"],
+                   cwd=ROOT, check=True)
+    for p in sorted(out.iterdir()):
+        with open(p, "rb") as f:
+            r = client.post("/api/v1/inspect", files={"file": (p.name, f)}, data={"category": "transistor"})
+        expected = 400 if p.name in {"empty.png", "not_an_image.txt", "truncated.png"} else 200
+        assert r.status_code == expected, (p.name, r.status_code, r.text[:200])
