@@ -8,6 +8,8 @@ torch>=2.2
 torchvision>=0.17
 openvino>=2024.4
 nncf>=2.13
+onnx>=1.16           # in-browser build (scripts/export_web.py)
+onnxruntime>=1.18
 pytest>=8.0
 httpx>=0.27          # FastAPI TestClient
 -r requirements-serve.txt
