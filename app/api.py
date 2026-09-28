@@ -1,4 +1,3 @@
-"""REST API (versioned under /api/v1). OpenAPI docs at /docs."""
 from __future__ import annotations
 
 import base64
