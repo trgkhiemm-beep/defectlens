@@ -110,3 +110,29 @@ def test_benchmark_script(edge):
     res = json.loads((edge / "benchmark.json").read_text())["results"]
     assert all(r["p50_ms"] > 0 and r["repeats"] == 2 and r["p50_min_ms"] <= r["p50_ms"] <= r["p50_max_ms"]
                for r in res)
+
+
+def test_export_web_matches_openvino(edge, tmp_path):
+    out = tmp_path / "web"
+    subprocess.run([sys.executable, "scripts/export_web.py", "--edge", str(edge), "--variant", "fp32/r0.05",
+                    "--out", str(out), "--no-pretrained"], cwd=ROOT, check=True)
+    m = json.loads((out / "models" / "manifest.json").read_text())
+    assert m["parity_max_rel_diff"] < 0.01 and set(m["categories"]) == {"metal_nut", "transistor"}
+    for c in m["categories"].values():
+        assert (out / c["model"]).exists() and c["threshold"] > 0
+    assert (out / "samples" / "transistor_defect.png").exists()
+
+
+def test_store_weights_fp16_halves_size_and_keeps_outputs(embedder, tmp_path):
+    import onnxruntime as ort
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from export_web import export, store_weights_fp16
+    x = torch.randn(1, 3, 64, 64)
+    path = tmp_path / "e.onnx"
+    export(embedder, x, path, ["embedding"])
+    before = path.stat().st_size
+    ref = ort.InferenceSession(str(path)).run(None, {"input": x.numpy()})[0]
+    store_weights_fp16(path)
+    got = ort.InferenceSession(str(path)).run(None, {"input": x.numpy()})[0]
+    assert path.stat().st_size < 0.6 * before
+    assert np.abs(got - ref).max() < 1e-2 * np.abs(ref).max()

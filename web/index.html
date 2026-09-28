@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DefectLens</title>
+  <meta name="description" content="Unsupervised industrial defect detection (PatchCore) running entirely in your browser with ONNX Runtime Web.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>DefectLens</h1>
+    <p class="lead">Unsupervised visual inspection: a PatchCore model trained <strong>only on defect-free parts</strong>
+      (MVTec AD) finds anomalies it has never seen. It runs <strong>entirely in your browser</strong>: the image never leaves this device.</p>
+    <p class="status" id="status" role="status">Loading…</p>
+  </header>
+
+  <main>
+    <section class="panel" aria-labelledby="input-h">
+      <h2 id="input-h">1 · Input</h2>
+      <label class="field">Category
+        <select id="category"></select>
+      </label>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept="image/*">
+        <span>Drop an image of the selected part here, or click to choose one</span>
+      </label>
+      <h3>Examples (MVTec AD test set)</h3>
+      <div class="examples" id="examples"></div>
+      <label class="field inline">Backend
+        <select id="backend">
+          <option value="wasm">WASM, multi-threaded CPU (verified)</option>
+          <option value="webgpu">WebGPU (experimental, falls back to WASM)</option>
+        </select>
+      </label>
+    </section>
+
+    <section class="panel" aria-labelledby="result-h">
+      <h2 id="result-h">2 · Result</h2>
+      <div class="canvases">
+        <figure><canvas id="input-canvas" width="256" height="256"></canvas><figcaption>Input (256×256)</figcaption></figure>
+        <figure><canvas id="output-canvas" width="256" height="256"></canvas><figcaption>Anomaly map · white contour = above threshold</figcaption></figure>
+      </div>
+      <div class="verdict" id="verdict" aria-live="polite">—</div>
+      <dl class="details" id="details"></dl>
+      <p class="note">The score is a nearest-neighbour distance, not a probability: the verdict is DEFECT when it reaches
+        the category threshold, chosen on validation data for a 5% false-reject target.</p>
+    </section>
+  </main>
+
+  <section class="panel wide" aria-labelledby="model-h">
+    <h2 id="model-h">Model</h2>
+    <table id="metrics"><thead><tr><th>Category</th><th>Image AUROC</th><th>AUPRO@0.3</th><th>F1</th><th>FPR</th><th>Threshold</th><th>Scorer size</th></tr></thead><tbody></tbody></table>
+    <p class="note" id="model-note"></p>
+  </section>
+
+  <footer>
+    PatchCore (Roth et al., CVPR 2022) implemented from scratch in PyTorch, exported to ONNX, running on
+    <a href="https://onnxruntime.ai/docs/tutorials/web/" rel="noopener">ONNX Runtime Web</a>.
+    Trained on <a href="https://www.mvtec.com/company/research/datasets/mvtec-ad" rel="noopener">MVTec AD</a> (CC BY-NC-SA 4.0): non-commercial use only.
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

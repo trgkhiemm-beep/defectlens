@@ -27,3 +27,7 @@ kernel.errors.txt
 
 # Local editor/agent tooling
 .claude/
+
+# Generated in-browser build (scripts/export_web.py), uploaded to the HF Space, not to git
+/web/models/
+/web/samples/
