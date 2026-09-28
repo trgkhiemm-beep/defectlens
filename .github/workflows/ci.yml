@@ -46,5 +46,5 @@ jobs:
           docker build -t defectlens:ci .
       - name: Image imports without torch
         run: >
-          docker run --rm -e DEFECTLENS_NO_AUTOLOAD=1 defectlens:ci
+          docker run --rm defectlens:ci
           python -c "import sys, app.main; assert 'torch' not in sys.modules; print('ok')"

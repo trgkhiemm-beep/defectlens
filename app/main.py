@@ -1,8 +1,12 @@
-"""ASGI entry point:  uvicorn app.main:app --host 0.0.0.0 --port 7860"""
+"""ASGI app factory:  uvicorn app.main:create_app --factory --host 0.0.0.0 --port 7860
+
+A factory rather than a module-level `app = create_app()`: importing this module must not
+load a model (a module-level app made every test that imported it depend on a local
+deploy/model/ bundle, which exists on a dev machine but not in CI).
+"""
 from __future__ import annotations
 
 import logging
-import os
 
 import gradio as gr
 from fastapi import FastAPI
@@ -24,6 +28,3 @@ def create_app(model_dir: str | None = None, with_ui: bool = True) -> FastAPI:
     if with_ui:
         api = gr.mount_gradio_app(api, build_ui(svc), path="/")
     return api
-
-
-app = create_app() if os.environ.get("DEFECTLENS_NO_AUTOLOAD") != "1" else None

@@ -67,6 +67,13 @@ def test_ui_and_openapi_are_served(client):
     assert "/api/v1/inspect" in client.get("/openapi.json").json()["paths"]
 
 
+def test_importing_app_loads_no_model(tmp_path):
+    """Regression: a module-level `app = create_app()` made CI fail (no deploy/model/ there)."""
+    import os
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(ROOT), os.environ.get("PYTHONPATH")]))}
+    subprocess.run([sys.executable, "-c", "import app.main"], cwd=tmp_path, env=env, check=True)
+
+
 def test_serving_code_does_not_import_torch():
     code = "import sys, app.service, app.api, app.ui; assert 'torch' not in sys.modules, 'torch imported'"
     subprocess.run([sys.executable, "-c", code], cwd=ROOT, check=True)
